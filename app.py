@@ -17,63 +17,64 @@ def generate_wallpaper():
     # Load the user's uploaded image
     image_file = request.files["image"]
     names = request.form.getlist("names")
-    
+
     # Save the uploaded image
     image_file.save(os.path.join(app.config["UPLOAD_FOLDER"], "upload.png"))
-    
+
     # Load the face images and select the ones with matching names
     face_images = [
-        Image.open(os.path.join(app.config["IMAGE_FOLDER"], f"{name}.jpg"))
-        for name in names if os.path.isfile(os.path.join(app.config["IMAGE_FOLDER"], f"{name}.jpg"))
     ]
 
     for name in names:
         image_path = os.path.join(app.config["IMAGE_FOLDER"], f"{name}.jpg")
         if os.path.isfile(image_path):
             face_image = Image.open(image_path)
-            # Resize the face image to a smaller size
-            face_images.append(face_image)
-    
+        else:
+            continue
+        face_images.append(face_image)
+
     # Load the original image
-    original_image = Image.open(os.path.join(app.config["UPLOAD_FOLDER"], "upload.png"))
-    
+    original_image = Image.open(os.path.join(
+        app.config["UPLOAD_FOLDER"], "upload.png"))
+
     # Convert the mode of the original image to 'RGBA' if it does not have an alpha channel
     if original_image.mode != 'RGBA':
         original_image = original_image.convert('RGBA')
-    
+
     # Paste the face images on the original image
     for i, face_image in enumerate(random.sample(face_images, min(16, len(face_images)))):
         # Select a random position and rotation for the face image
         angle = random.randint(-30, 30)
         if face_image.width > original_image.width or face_image.height > original_image.height:
             # Resize the face image to fit within the original image
-            face_image = face_image.resize((original_image.width // 2, original_image.height // 2))
+            face_image = face_image.resize(
+                (original_image.width // 2, original_image.height // 2))
 
         # Rotate the face image
-        rotated_image = face_image.rotate(angle, expand=True, fillcolor=(0, 0, 0, 0))
+        rotated_image = face_image.rotate(
+            angle, expand=True, fillcolor=(0, 0, 0, 0))
         optimal_size = calculate_optimal_size(rotated_image.size, 100)
         rotated_image = rotated_image.resize(optimal_size)
 
         # Remove the black background
         mask = Image.new("L", rotated_image.size, 0)
         draw = ImageDraw.Draw(mask)
-        draw.ellipse((0, 0, rotated_image.width, rotated_image.height), fill=255)
+        draw.rectangle([(0, 0), rotated_image.size], fill=255, outline=None)
+        for x in range(rotated_image.width):
+            for y in range(rotated_image.height):
+                if rotated_image.getpixel((x, y)) == (0, 0, 0):
+                    draw.point((x, y), fill=0)
+
+        # Paste the rotated image on the original image
         rotated_image.putalpha(mask)
+        num_copies = random.randint(1, 5)
+        for i in range(num_copies):
+            position = (
+                random.randint(0, original_image.width - rotated_image.width),
+                random.randint(0, original_image.height - rotated_image.height)
+            )
+            original_image.alpha_composite(rotated_image, position)
 
-        # Paste the face image on the original image
-        position = (
-            random.randint(0, original_image.width - rotated_image.width),
-            random.randint(0, original_image.height - rotated_image.height)
-        )
-        original_image.alpha_composite(rotated_image, position)
-
-        """ # Rotate and paste the face image on the original image
-        x_offset = random.randint(-original_image.width//4, original_image.width//4)
-        y_offset = random.randint(-original_image.height//4, original_image.height//4)
-        face_image = face_image.rotate(angle, expand=True)
-        face_image = face_image.convert("RGBA")
-        original_image.alpha_composite(face_image, (x_offset, y_offset))"""
-    
     # Enhance the colors and brightness of the wallpaper
     enhancer = ImageEnhance.Color(original_image)
     original_image = enhancer.enhance(1.2)
@@ -82,10 +83,11 @@ def generate_wallpaper():
 
     wallpaper_path = os.path.join(app.config["UPLOAD_FOLDER"], "wallpaper.png")
     original_image.save(wallpaper_path)
-    
+
     # Return the URL of the wallpaper file
     url = f"http://127.0.0.1:5000/{wallpaper_path}"
     return url
+
 
 def calculate_optimal_size(original_size, max_size):
     """
@@ -108,6 +110,7 @@ def calculate_optimal_size(original_size, max_size):
 
 
 UPLOAD_FOLDER = os.path.abspath("uploads")
+
 
 @app.route("/uploads/<path:path>")
 def serve_upload(path):
