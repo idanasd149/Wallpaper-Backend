@@ -3,6 +3,9 @@ import os
 import random
 from PIL import Image, ImageEnhance, ImageDraw
 from flask_cors import CORS
+import time
+import tempfile
+import shutil
 
 
 app = Flask(__name__)
@@ -14,6 +17,7 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 @app.route("/generate", methods=["POST"])
 def generate_wallpaper():
+    start_time = time.time()
     # Load the user's uploaded image
     image_file = request.files["image"]
     names = request.form.getlist("names")
@@ -33,6 +37,9 @@ def generate_wallpaper():
             continue
         face_images.append(face_image)
 
+    resize_and_save_image(os.path.join(
+        app.config["UPLOAD_FOLDER"], "upload.png"))
+
     # Load the original image
     original_image = Image.open(os.path.join(
         app.config["UPLOAD_FOLDER"], "upload.png"))
@@ -42,33 +49,34 @@ def generate_wallpaper():
         original_image = original_image.convert('RGBA')
 
     # Paste the face images on the original image
-    for i, face_image in enumerate(random.sample(face_images, min(16, len(face_images)))):
-        # Select a random position and rotation for the face image
-        angle = random.randint(-30, 30)
-        if face_image.width > original_image.width or face_image.height > original_image.height:
-            # Resize the face image to fit within the original image
-            face_image = face_image.resize(
-                (original_image.width // 2, original_image.height // 2))
+    num_copies = random.randint(1, 5)
+    for i in range(num_copies):
+        for i, face_image in enumerate(random.sample(face_images, min(16, len(face_images)))):
+            # Select a random position and rotation for the face image
+            angle = random.randint(-30, 30)
+            if face_image.width > original_image.width or face_image.height > original_image.height:
+                # Resize the face image to fit within the original image
+                face_image = face_image.resize(
+                    (original_image.width // 2, original_image.height // 2))
 
-        # Rotate the face image
-        rotated_image = face_image.rotate(
-            angle, expand=True, fillcolor=(0, 0, 0, 0))
-        optimal_size = calculate_optimal_size(rotated_image.size, 100)
-        rotated_image = rotated_image.resize(optimal_size)
+            # Rotate the face image
+            rotated_image = face_image.rotate(
+                angle, expand=True, fillcolor=(0, 0, 0, 0))
+            optimal_size = calculate_optimal_size(rotated_image.size, 175)
+            rotated_image = rotated_image.resize(optimal_size)
 
-        # Remove the black background
-        mask = Image.new("L", rotated_image.size, 0)
-        draw = ImageDraw.Draw(mask)
-        draw.rectangle([(0, 0), rotated_image.size], fill=255, outline=None)
-        for x in range(rotated_image.width):
-            for y in range(rotated_image.height):
-                if rotated_image.getpixel((x, y)) == (0, 0, 0):
-                    draw.point((x, y), fill=0)
+            # Remove the black background
+            mask = Image.new("L", rotated_image.size, 0)
+            draw = ImageDraw.Draw(mask)
+            draw.rectangle([(0, 0), rotated_image.size],
+                           fill=255, outline=None)
+            for x in range(rotated_image.width):
+                for y in range(rotated_image.height):
+                    if rotated_image.getpixel((x, y)) == (0, 0, 0):
+                        draw.point((x, y), fill=0)
 
-        # Paste the rotated image on the original image
-        rotated_image.putalpha(mask)
-        num_copies = random.randint(1, 5)
-        for i in range(num_copies):
+            # Paste the rotated image on the original image
+            rotated_image.putalpha(mask)
             position = (
                 random.randint(0, original_image.width - rotated_image.width),
                 random.randint(0, original_image.height - rotated_image.height)
@@ -86,17 +94,13 @@ def generate_wallpaper():
 
     # Return the URL of the wallpaper file
     url = f"http://127.0.0.1:5000/{wallpaper_path}"
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    print("Elapsed time: ", elapsed_time, "seconds")
     return url
 
 
 def calculate_optimal_size(original_size, max_size):
-    """
-    Calculates the optimal size for an image given its original size and a maximum size to resize to.
-
-    :param original_size: Tuple of the form (width, height) representing the original size of the image.
-    :param max_size: The maximum size to resize the image to, as an integer representing the width of the image in pixels.
-    :return: Tuple of the form (width, height) representing the optimal size of the image after resizing.
-    """
     width, height = original_size
     if width <= max_size and height <= max_size:
         # The image is already smaller than the maximum size, no need to resize it
@@ -107,6 +111,38 @@ def calculate_optimal_size(original_size, max_size):
     else:
         # Image is taller than it is wide, so we should resize its height to the maximum size and its width proportionally
         return (int(width / height * max_size), max_size)
+
+
+def resize_image(img, max_width=1920, max_height=1080):
+    width, height = img.size
+    if width > max_width or height > max_height:
+        aspect_ratio = width / height
+        if aspect_ratio > max_width / max_height:
+            new_width = max_width
+            new_height = int(new_width / aspect_ratio)
+        else:
+            new_height = max_height
+            new_width = int(new_height * aspect_ratio)
+        img = img.resize((new_width, new_height))
+    return img
+
+
+def save_image(img, path):
+    img.save(path)
+
+
+def resize_and_save_image(image_path):
+    with Image.open(image_path) as img:
+        if img.mode != 'RGBA':
+            img = img.convert('RGBA')
+        img = resize_image(img, max_width=1920, max_height=1080)
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as temp:
+            temp_path = temp.name
+            save_image(img, temp_path)
+        upload_dir = os.path.dirname(image_path)
+        upload_path = os.path.join(upload_dir, os.path.basename(image_path))
+        shutil.copy2(temp_path, upload_path)
+    os.remove(temp_path)
 
 
 UPLOAD_FOLDER = os.path.abspath("uploads")
