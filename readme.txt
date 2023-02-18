@@ -1,2 +1,2 @@
-set FLASK_APP=images.py
+set FLASK_APP=app.py
 flask run
