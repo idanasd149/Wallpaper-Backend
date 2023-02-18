@@ -6,7 +6,7 @@ from flask_cors import CORS
 import time
 import tempfile
 import shutil
-
+import cv2
 
 app = Flask(__name__)
 cors = CORS(app)
@@ -21,14 +21,15 @@ def generate_wallpaper():
     # Load the user's uploaded image
     image_file = request.files["image"]
     names = request.form.getlist("names")
+    face_model = request.form.get("face_model_on")
 
     # Save the uploaded image
     image_file.save(os.path.join(app.config["UPLOAD_FOLDER"], "upload.png"))
 
-    # Load the face images and select the ones with matching names
     face_images = [
     ]
 
+    # Appending all the names to array of images
     for name in names:
         image_path = os.path.join(app.config["IMAGE_FOLDER"], f"{name}.jpg")
         if os.path.isfile(image_path):
@@ -37,6 +38,10 @@ def generate_wallpaper():
             continue
         face_images.append(face_image)
 
+    # Path for wallpaper
+    wallpaper_path = os.path.join(app.config["UPLOAD_FOLDER"], "wallpaper.png")
+
+    # Resizing the original image
     resize_and_save_image(os.path.join(
         app.config["UPLOAD_FOLDER"], "upload.png"))
 
@@ -44,52 +49,22 @@ def generate_wallpaper():
     original_image = Image.open(os.path.join(
         app.config["UPLOAD_FOLDER"], "upload.png"))
 
-    # Convert the mode of the original image to 'RGBA' if it does not have an alpha channel
-    if original_image.mode != 'RGBA':
-        original_image = original_image.convert('RGBA')
+    # Call the calculate_face_center function to detect faces in the image
+    face_centers = calculate_face_center(os.path.join(
+        app.config["UPLOAD_FOLDER"], "upload.png"))
 
-    # Paste the face images on the original image
-    num_copies = random.randint(1, 5)
-    for i in range(num_copies):
-        for i, face_image in enumerate(random.sample(face_images, min(16, len(face_images)))):
-            # Select a random position and rotation for the face image
-            angle = random.randint(-30, 30)
-            if face_image.width > original_image.width or face_image.height > original_image.height:
-                # Resize the face image to fit within the original image
-                face_image = face_image.resize(
-                    (original_image.width // 2, original_image.height // 2))
+    if face_model == 'true':
+        print('face found')
+        # If a face is detected, paste a random face image on the original image
+        original_image = paste_face_image(
+            original_image, face_images, face_centers)
 
-            # Rotate the face image
-            rotated_image = face_image.rotate(
-                angle, expand=True, fillcolor=(0, 0, 0, 0))
-            optimal_size = calculate_optimal_size(rotated_image.size, 175)
-            rotated_image = rotated_image.resize(optimal_size)
+    else:
+        print('face not found')
+        # If no face is detected, paste a random face image on the original image at a random position and rotation
+        original_image = paste_random_image(original_image, face_images)
 
-            # Remove the black background
-            mask = Image.new("L", rotated_image.size, 0)
-            draw = ImageDraw.Draw(mask)
-            draw.rectangle([(0, 0), rotated_image.size],
-                           fill=255, outline=None)
-            for x in range(rotated_image.width):
-                for y in range(rotated_image.height):
-                    if rotated_image.getpixel((x, y)) == (0, 0, 0):
-                        draw.point((x, y), fill=0)
-
-            # Paste the rotated image on the original image
-            rotated_image.putalpha(mask)
-            position = (
-                random.randint(0, original_image.width - rotated_image.width),
-                random.randint(0, original_image.height - rotated_image.height)
-            )
-            original_image.alpha_composite(rotated_image, position)
-
-    # Enhance the colors and brightness of the wallpaper
-    enhancer = ImageEnhance.Color(original_image)
-    original_image = enhancer.enhance(1.2)
-    enhancer = ImageEnhance.Brightness(original_image)
-    original_image = enhancer.enhance(1.2)
-
-    wallpaper_path = os.path.join(app.config["UPLOAD_FOLDER"], "wallpaper.png")
+    # Save the modified image to a file
     original_image.save(wallpaper_path)
 
     # Return the URL of the wallpaper file
@@ -143,6 +118,207 @@ def resize_and_save_image(image_path):
         upload_path = os.path.join(upload_dir, os.path.basename(image_path))
         shutil.copy2(temp_path, upload_path)
     os.remove(temp_path)
+
+
+def paste_face_imagebackup(original_image, face_images, face_center):
+    # Select a random face image
+    face_image = random.sample(face_images, min(16, len(face_images)))[0]
+
+    # Resize the face image to fit within the original image
+    max_width = original_image.width - face_center[0]
+    max_height = original_image.height - face_center[1]
+    face_image = resize_face_image(face_image, max_width, max_height)
+
+    # Rotate the face image and remove the black background
+    angle = random.randint(-30, 30)
+    rotated_image = rotate_face_image(face_image, angle)
+    mask = remove_black_background(rotated_image)
+    rotated_image.putalpha(mask)
+
+    # Calculate the position to paste the face image
+    position = (
+        int(face_center[0] - rotated_image.width / 2),
+        int(face_center[1] - rotated_image.height / 2)
+    )
+
+    # Create a new Image object with the same size and mode as the original image
+    canvas = Image.new(mode=original_image.mode, size=original_image.size)
+
+    # Paste the original image onto the new Image object
+    canvas.paste(original_image, (0, 0))
+
+    # Paste the rotated image onto the new Image object
+    canvas.alpha_composite(rotated_image, position)
+
+    return canvas
+
+
+def paste_face_image(original_image, face_images, face_centers):
+    # Create a new Image object with the same size and mode as the original image
+    canvas = Image.new(mode=original_image.mode, size=original_image.size)
+
+    # Paste the original image onto the new Image object
+    canvas.paste(original_image, (0, 0))
+
+    # Iterate over all face centers
+    for face_center in face_centers:
+        # Select a random face image
+        face_image = random.sample(face_images, min(16, len(face_images)))[0]
+
+        # Resize the face image to fit within the original image
+        max_width = original_image.width - face_center[0]
+        max_height = original_image.height - face_center[1]
+        face_image = resize_face_image(face_image, max_width, max_height)
+
+        # Rotate the face image and remove the black background
+        angle = random.randint(-30, 30)
+        rotated_image = rotate_face_image(face_image, angle)
+        mask = remove_black_background(rotated_image)
+        rotated_image.putalpha(mask)
+
+        # Calculate the position to paste the face image
+        position = (
+            int(face_center[0] - rotated_image.width / 2),
+            int(face_center[1] - rotated_image.height / 2)
+        )
+
+        # Paste the rotated image onto the new Image object
+        canvas.alpha_composite(rotated_image, position)
+    return canvas
+
+
+def paste_random_image(original_image, face_images):
+    num_copies = random.randint(1, 5)
+    for face_image in face_images:
+        for i in range(num_copies):
+            angle = random.randint(-30, 30)
+            rotated_image = rotate_face_image(face_image, angle)
+
+            # Remove the black background and paste the rotated image at a random position on the original image
+            mask = remove_black_background(rotated_image)
+            rotated_image.putalpha(mask)
+            position = get_random_position(original_image, rotated_image)
+            original_image.alpha_composite(rotated_image, position)
+    return original_image
+
+
+def get_paste_position(center, face_image):
+    return (
+        int(center[0] - face_image.width / 2),
+        int(center[1] - face_image.height / 2)
+    )
+
+
+def calculate_face_center(image_path, probability_threshold=0.5):
+    # Load the image using OpenCV
+    image = cv2.imread(image_path)
+
+    # Load the pre-trained face detection model
+    face_cascade = cv2.CascadeClassifier("holyshitfacedetectionxml.xml")
+
+    # Convert the image to grayscale for faster processing
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Detect faces in the image using the face detection model
+    faces = face_cascade.detectMultiScale(
+        gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+
+    if len(faces) == 0:
+        # If no faces are detected, return an empty array
+        return []
+
+    # Calculate the probability of each detected face based on the size of the face
+    max_size = max([w*h for (x, y, w, h) in faces])
+    probabilities = [(w*h) / max_size for (x, y, w, h) in faces]
+
+    # Create an array to store the center coordinates of each detected face
+    centers = []
+
+    # Iterate over all detected faces
+    for i in range(len(faces)):
+        # Check if the probability of the current face is above the threshold
+        if probabilities[i] >= probability_threshold:
+            print(probabilities[i])
+            # Calculate the center coordinates of the current face
+            (x, y, w, h) = faces[i]
+            center_x = int(x + w / 2)
+            center_y = int(y + h / 2)
+
+            # Add the center coordinates to the array
+            centers.append((center_x, center_y))
+
+    # Return the array of center coordinates
+    return centers
+
+
+def calculate_face_centerMUCHBETTERCANTUSE(original_image):
+    # Load the face detector
+    detector = dlib.get_frontal_face_detector()
+
+    # Resize the image for faster processing
+    resized_image = imutils.resize(original_image, width=500)
+
+    # Detect faces in the resized image
+    detections = detector(resized_image, 1)
+
+    # If no faces are detected, return None
+    if len(detections) == 0:
+        return None
+
+    # If multiple faces are detected, choose the one with the largest area
+    detection = max(detections, key=lambda d: d.area())
+
+    # Calculate the center position of the face
+    x = detection.left() + detection.width() // 2
+    y = detection.top() + detection.height() // 2
+
+    # Calculate the certainly based on the detection score
+    certainly = detection.confidence
+
+    # If the certainly is high enough, return the coordinates as a tuple
+    if certainly >= 1.0:
+        return (x, y)
+
+    # If the certainly is not high enough, return None
+    return None
+
+
+def remove_black_background(image):
+    mask = Image.new("L", image.size, 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rectangle([(0, 0), image.size],
+                   fill=255, outline=None)
+    for x in range(image.width):
+        for y in range(image.height):
+            if image.getpixel((x, y)) == (0, 0, 0):
+                draw.point((x, y), fill=0)
+
+    return mask
+
+
+def resize_face_image(face_image, max_width, max_height):
+    width, height = face_image.size
+    if width > max_width or height > max_height:
+        scale = min(max_width / width, max_height / height)
+        new_width = int(width * scale)
+        new_height = int(height * scale)
+        return face_image.resize((new_width, new_height))
+    else:
+        return face_image
+
+
+def rotate_face_image(face_image, angle):
+    rotated_image = face_image.rotate(
+        angle, expand=True, fillcolor=(0, 0, 0, 0))
+    optimal_size = calculate_optimal_size(rotated_image.size, 175)
+    rotated_image = rotated_image.resize(optimal_size)
+    return rotated_image
+
+
+def get_random_position(original_image, rotated_image):
+    x = random.randint(0, original_image.width - rotated_image.width)
+    y = random.randint(0, original_image.height - rotated_image.height)
+    return (x, y)
 
 
 UPLOAD_FOLDER = os.path.abspath("uploads")
